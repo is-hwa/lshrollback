@@ -1,0 +1,77 @@
+---
+# 1) 팩트 수집
+- name: 패키지/서비스 팩트 수집
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: 서비스 팩트 수집
+  ansible.builtin.service_facts:
+
+# 2) firewalld 설치/실행 여부 계산 (항상 실행 + 안전 접근)
+- name: firewalld 설치/실행 여부 계산
+  vars:
+    svc_map: "{{ ansible_facts.services | default({}) }}"
+  ansible.builtin.set_fact:
+    firewalld_installed: >-
+      {{ 'firewalld' in (ansible_facts.packages | default({})) or
+         'firewalld.service' in svc_map or
+         'firewalld' in svc_map }}
+    firewalld_running: >-
+      {{ (svc_map.get('firewalld.service', svc_map.get('firewalld', {}))
+          | default({})).get('state','') == 'running' }}
+  tags: [firewalld]
+
+# 3) 방화벽 서비스 규칙 제거
+- name: firewalld 서비스 규칙 제거
+  ansible.posix.firewalld:
+    service: "{{ item }}"
+    zone: "{{ fw_zone | default('public') }}"
+    permanent: true
+    immediate: "{{ firewalld_running | default(false) }}"
+    state: disabled
+  loop: "{{ fw_svcs | default([]) }}"
+  when: (firewalld_installed | default(false)) and ((fw_svcs | default([]) | length) > 0)
+  failed_when: false
+  tags: [firewalld]
+
+# 4) 방화벽 포트 규칙 제거
+- name: firewalld 포트 규칙 제거
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    zone: "{{ fw_zone | default('public') }}"
+    permanent: true
+    immediate: "{{ firewalld_running | default(false) }}"
+    state: disabled
+  loop: "{{ fw_ports | default([]) }}"
+  when: (firewalld_installed | default(false)) and ((fw_ports | default([]) | length) > 0)
+  failed_when: false
+  tags: [firewalld]
+
+# 5) 서비스 중지/비활성
+- name: 서비스 중지 및 부팅 비활성화
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ svcs | default([]) }}"
+  when: (svcs | default([]) | length) > 0
+  failed_when: false
+  tags: [service]
+
+# 6) 파일/디렉터리 제거
+- name: 설정 파일/디렉터리 제거
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ files | default([]) }}"
+  when: (files | default([]) | length) > 0
+  tags: [files]
+
+# 7) 패키지 제거
+- name: 패키지 제거 (플랫폼 중립)
+  ansible.builtin.package:
+    name: "{{ pkgs | default([]) }}"
+    state: absent
+  when: (pkgs | default([]) | length) > 0
+  failed_when: false
+  tags: [package]
